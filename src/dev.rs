@@ -33,7 +33,9 @@ pub fn main() -> Result<(), String> {
                     }
 
                     let mut global_changed = file_changed.lock().unwrap();
-                    if !*global_changed {
+                    if changed && !*global_changed {
+                        println!("File changed (Waiting 1s)");
+                        thread::sleep(Duration::from_secs(1));
                         *global_changed = changed;
                     }
                 }
@@ -66,7 +68,7 @@ pub fn main() -> Result<(), String> {
                 let config = config.lock().unwrap().clone();
                 let path = config.from_path.0;
 
-                if !path.join("assets").exists() {
+                if config.name.0.is_empty() {
                     continue;
                 } else if !path.join("assets").exists() {
                     eprintln!("Assets folder Not found");
@@ -111,14 +113,13 @@ pub fn main() -> Result<(), String> {
                 let to_path = config.to_path.0;
 
                 if path != to_path {
-                  println!("{} -> {}", from_path.display(), to_path.display());
-                  for file in from_path.read_dir().unwrap() {
-                      let path = file.unwrap().path();
-                      rename(path.clone(), to_path.join(path.file_name().unwrap()))
-                          .unwrap_or_else(|e| eprintln!("{}", e))
-                  }
+                    println!("{} -> {}", from_path.display(), to_path.display());
+                    for file in from_path.read_dir().unwrap() {
+                        let path = file.unwrap().path();
+                        rename(path.clone(), to_path.join(path.file_name().unwrap()))
+                            .unwrap_or_else(|e| eprintln!("{}", e))
+                    }
                 }
-
             }
         }
     });
