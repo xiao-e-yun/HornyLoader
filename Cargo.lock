@@ -3,20 +3,6 @@
 version = 3
 
 [[package]]
-name = "addons"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "image",
- "image_dds",
- "notify",
- "rfd",
- "serde",
- "serde_json",
- "sevenz-rust",
-]
-
-[[package]]
 name = "adler"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -697,6 +683,20 @@ name = "hermit-abi"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d77f7ec81a6d05a3abb01ab6eb7590f6083d08449fe5a1c8b1e620283546ccb7"
+
+[[package]]
+name = "horny_loader"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "image",
+ "image_dds",
+ "notify",
+ "rfd",
+ "serde",
+ "serde_json",
+ "sevenz-rust",
+]
 
 [[package]]
 name = "humantime"

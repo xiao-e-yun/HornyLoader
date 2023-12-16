@@ -1,5 +1,6 @@
 [package]
-name = "addons"
+name = "horny_loader"
+authors = ["xiaoeyun"]
 version = "0.1.0"
 edition = "2021"
 
