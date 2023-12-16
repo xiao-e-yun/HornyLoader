@@ -24,12 +24,18 @@ pub fn main() -> Result<(), String> {
             notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(e) = res {
                     let mut changed = false;
-                    let root_path = watcher_config.lock().unwrap().from_path.0.clone();
+                    let config = watcher_config.lock().unwrap();
+                    let root_path = config.from_path.0.clone();
+                    let hot_reload = config.hot_reload.0.clone();
+                    let temp_dir = root_path.join("temp");
+                    let assets_dir = root_path.join("assets");
+                    let textures_dir = root_path.join("textures");
                     for path in e.paths {
                         changed = changed
-                            || path.starts_with(root_path.join("assets"))
-                            || path.starts_with(root_path.join("temp"))
-                            || path.starts_with(root_path.join("textures"));
+                            || path.starts_with(&temp_dir)
+                            || (path.starts_with(&assets_dir)
+                                && !(hot_reload && path.ends_with(".dds")))
+                            || path.starts_with(&textures_dir);
                     }
 
                     let mut global_changed = file_changed.lock().unwrap();
@@ -64,7 +70,6 @@ pub fn main() -> Result<(), String> {
 
             thread::sleep(Duration::from_secs(1));
             if *changed.lock().unwrap() {
-                *changed.lock().unwrap() = false;
                 let config = config.lock().unwrap().clone();
                 let path = config.from_path.0;
 
@@ -120,6 +125,8 @@ pub fn main() -> Result<(), String> {
                             .unwrap_or_else(|e| eprintln!("{}", e))
                     }
                 }
+
+                *changed.lock().unwrap() = false;
             }
         }
     });
