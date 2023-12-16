@@ -110,12 +110,15 @@ pub fn main() -> Result<(), String> {
                 let from_path = path.join("output");
                 let to_path = config.to_path.0;
 
-                println!("{} -> {}", from_path.display(), to_path.display());
-                for file in from_path.read_dir().unwrap() {
-                    let path = file.unwrap().path();
-                    rename(path.clone(), to_path.join(path.file_name().unwrap()))
-                        .unwrap_or_else(|e| eprintln!("{}", e))
+                if path != to_path {
+                  println!("{} -> {}", from_path.display(), to_path.display());
+                  for file in from_path.read_dir().unwrap() {
+                      let path = file.unwrap().path();
+                      rename(path.clone(), to_path.join(path.file_name().unwrap()))
+                          .unwrap_or_else(|e| eprintln!("{}", e))
+                  }
                 }
+
             }
         }
     });
