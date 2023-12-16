@@ -1,13 +1,12 @@
-use std::fs::{self, File};
+use std::thread;
 use std::time::Duration;
-use std::{env, thread};
 use std::{
     fmt::Display,
     io::{self, Write},
 };
 
 const BREAK_LINE: &'static str = "===================================================";
-use sevenz_rust::{Archive, BlockDecoder};
+
 mod dev;
 mod load;
 

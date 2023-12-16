@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
-use sevenz_rust::{Archive, BlockDecoder, Password};
+use sevenz_rust::{Archive, BlockDecoder};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     env,
-    fmt::format,
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
     path::Path,
@@ -57,7 +56,7 @@ fn choose_variants(config: ModConfig) -> Result<(), String> {
 
             let path = env::current_dir().unwrap();
             let temp = path.join("temp");
-            extract(&path,&temp,&id);
+            extract(&path, &temp, &id);
             build_genshin_mod(path.as_path(), config.name.clone(), true, id)?;
             fs::remove_dir_all(temp).unwrap();
         } else if choose < exit_index {
@@ -84,7 +83,7 @@ fn choose_variants(config: ModConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn extract(path: &Path, to: &Path , target: &str) {
+fn extract(path: &Path, to: &Path, target: &str) {
     let zip_path = path.join("package.7z");
     let mut zip = File::open(zip_path).unwrap();
     let len = zip.metadata().unwrap().len();
