@@ -1803,8 +1803,8 @@ class Import3DMigotoFrameAnalysis(bpy.types.Operator, ImportHelper, IOOBJOrienta
 
             ib_pattern = filename[:match.start()] + '-ib*' + filename[match.end():]
             vb_pattern = filename[:match.start()] + '-vb*' + filename[match.end():]
-            ib_paths = glob(os.path.join(dirname, "assets", ib_pattern))
-            vb_paths = glob(os.path.join(dirname, "assets", vb_pattern))
+            ib_paths = glob(os.path.join(dirname, ib_pattern))
+            vb_paths = glob(os.path.join(dirname, vb_pattern))
 
             if vb_paths and use_bin:
                 vb_bin_paths = [ os.path.splitext(x)[0] + '.buf' for x in vb_paths ]
@@ -1825,6 +1825,8 @@ class Import3DMigotoFrameAnalysis(bpy.types.Operator, ImportHelper, IOOBJOrienta
                     pose_path = glob(os.path.join(dirname, pose_pattern))[0]
                 except IndexError:
                     pass
+
+            print(ib_paths,vb_paths)
 
             if len(ib_paths) != 1 or len(vb_paths) != 1:
                 raise Fatal('Only draw calls using a single vertex buffer and a single index buffer are supported for now')
