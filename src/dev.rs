@@ -7,10 +7,7 @@ use std::{
     fs::rename,
     mem,
     path::PathBuf,
-    sync::{
-        mpsc::{self, Sender},
-        Arc, Mutex,
-    },
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -91,8 +88,7 @@ pub fn main() -> Result<(), String> {
                     continue;
                 }
 
-                load::build_genshin_mod(&path, config.name.get(), true, String::new())
-                    .unwrap();
+                load::build_genshin_mod(&path, config.name.get(), true, String::new()).unwrap();
 
                 let from_path = path.join("output");
                 let to_path = config.to_path.get();
