@@ -1,10 +1,16 @@
-use notify::Watcher;
+use notify::{ReadDirectoryChangesWatcher, Watcher};
 use rfd::FileDialog;
 use std::{
+    borrow::BorrowMut,
+    collections::HashSet,
     env,
     fs::rename,
+    mem,
     path::PathBuf,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self, Sender},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -12,118 +18,101 @@ use std::{
 use crate::{list_and_choose, load, read_input};
 
 pub fn main() -> Result<(), String> {
-    let (tx, rx) = mpsc::channel::<DevConfig>();
+    let (tx, rx) = mpsc::channel::<DevThreadMessage>();
     let mut config = DevConfig::new();
 
     thread::spawn(move || {
-        let config = Arc::new(Mutex::new(DevConfig::new()));
-        let watcher_config = config.clone();
-        let changed = Arc::new(Mutex::new(false));
-        let file_changed = changed.clone();
-        let mut watcher =
-            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(e) = res {
-                    let mut changed = false;
-                    let root_path = watcher_config.lock().unwrap().from_path.0.clone();
-                    for path in e.paths {
-                        changed = changed
-                            || path.starts_with(root_path.join("assets"))
-                            || path.starts_with(root_path.join("temp"))
-                            || path.starts_with(root_path.join("textures"));
-                    }
-
-                    let mut global_changed = file_changed.lock().unwrap();
-                    if !*global_changed {
-                        *global_changed = changed;
-                    }
-                }
-            })
-            .unwrap();
+        let mut config = DevConfig::new();
+        let mut file_watcher = FileWatcher::new();
+        let mut dds_parser = DDSParser::new(config.to_path.get());
 
         loop {
-            if let Some(new_config) = rx.try_recv().ok() {
-                if config.lock().unwrap().hot_reload.0 {
-                    watcher
-                        .unwatch(config.lock().unwrap().from_path.0.as_path())
-                        .unwrap();
+            let mut build = false;
+            let mut parse_list = HashSet::new();
+
+            //if config updated
+            if let Some(event) = rx.try_recv().ok() {
+                match event {
+                    DevThreadMessage::Config(new_config) => {
+                        dds_parser.reload(new_config.to_path.get());
+
+                        if new_config.hot_reload.get() {
+                            file_watcher.watch(new_config.from_path.get());
+                        } else {
+                            file_watcher.close()
+                        }
+
+                        config = new_config
+                    }
+                    DevThreadMessage::Update => {
+                        let textures_dir = config.from_path.get().join("textures");
+                        if textures_dir.is_dir() {
+                            let textures = textures_dir
+                                .read_dir()
+                                .unwrap()
+                                .filter_map(|e| e.ok().and_then(|e| Some(e.path())));
+                            parse_list.extend(textures);
+                        };
+                        build = true
+                    }
+                    DevThreadMessage::Close => {
+                        file_watcher.close();
+                        return;
+                    }
                 }
-                if new_config.hot_reload.0 {
-                    watcher
-                        .watch(
-                            new_config.from_path.0.as_path(),
-                            notify::RecursiveMode::Recursive,
-                        )
-                        .unwrap();
+            } else {
+                //watch file
+                for event in file_watcher.get() {
+                    match event {
+                        FileUpdateMessage::ParseDDS(path) => {
+                            parse_list.insert(path);
+                        }
+                        FileUpdateMessage::Rebuild => build = true,
+                    };
                 }
-                *config.lock().unwrap() = new_config;
-                println!("Config Changed");
-                *changed.lock().unwrap() = true;
             }
 
-            thread::sleep(Duration::from_secs(1));
-            if *changed.lock().unwrap() {
-                *changed.lock().unwrap() = false;
-                let config = config.lock().unwrap().clone();
-                let path = config.from_path.0;
+            //
+            for path in parse_list {
+                dds_parser.parse(path);
+            }
 
-                if !path.join("assets").exists() {
+            //
+            if build && dds_parser.finished() {
+                let path = config.from_path.get().clone();
+                if config.name.get().is_empty() {
+                    eprintln!("Miss Char name");
                     continue;
                 } else if !path.join("assets").exists() {
-                    eprintln!("Assets folder Not found");
+                    eprintln!("Assets folder not found");
                     continue;
                 } else if !path.join("temp").exists() {
                     eprintln!("Temp folder not found");
                     continue;
-                } else if path.join("textures").exists() {
-                    println!("found textures, auto parse to dds");
-                    for file in path.join("textures").read_dir().unwrap() {
-                        let file_path = file.unwrap().path();
-                        // accept PNG
-                        if !file_path.is_file() || file_path.extension().unwrap() != "png" {
-                            continue;
-                        }
-                        println!("parse {}", file_path.display());
-                        let image = image::open(file_path.clone()).unwrap().to_rgba8();
-                        let format = image_dds::ImageFormat::BC7Srgb;
-                        let dds = image_dds::dds_from_image(
-                            &image,
-                            format,
-                            image_dds::Quality::Fast,
-                            image_dds::Mipmaps::Disabled,
-                        )
-                        .unwrap();
-                        let mut writer = std::io::BufWriter::new(
-                            std::fs::File::create(&path.join("assets").join(
-                                file_path.file_stem().unwrap().to_string_lossy().to_string()
-                                    + ".dds",
-                            ))
-                            .unwrap(),
-                        );
-                        dds.write(&mut writer).unwrap();
-                    }
                 }
 
-                println!("Build genshin mod");
-                load::build_genshin_mod(&path, config.name.0, true, String::new())
-                    .unwrap_or_else(|e| eprintln!("{}", e));
+                load::build_genshin_mod(&path, config.name.get(), true, String::new())
+                    .unwrap();
 
                 let from_path = path.join("output");
-                let to_path = config.to_path.0;
+                let to_path = config.to_path.get();
 
+                //if input != output
                 if path != to_path {
-                  println!("{} -> {}", from_path.display(), to_path.display());
-                  for file in from_path.read_dir().unwrap() {
-                      let path = file.unwrap().path();
-                      rename(path.clone(), to_path.join(path.file_name().unwrap()))
-                          .unwrap_or_else(|e| eprintln!("{}", e))
-                  }
+                    println!("{} -> {}", from_path.display(), to_path.display());
+                    for file in from_path.read_dir().unwrap() {
+                        let path = file.unwrap().path();
+                        rename(path.clone(), to_path.join(path.file_name().unwrap()))
+                            .unwrap_or_else(|e| eprintln!("{}", e))
+                    }
                 }
-
             }
+
+            //add idle time
+            thread::sleep(Duration::from_millis(500));
         }
     });
 
-    tx.send(config.clone()).unwrap();
     loop {
         let action = list_and_choose(
             "Settings",
@@ -140,24 +129,152 @@ pub fn main() -> Result<(), String> {
         );
         let mut force = false;
         match action {
-            0 => config.name.set_value(),
-            1 => config.from_path.set_value(),
-            2 => config.to_path.set_value(),
-            3 => config.parse_dds.set_value(),
+            0 => config.name.set(),
+            1 => config.from_path.set(),
+            2 => config.to_path.set(),
+            3 => config.parse_dds.set(),
             4 => {
-                config.hot_reload.set_value();
+                config.hot_reload.set();
                 force = true;
             }
-            5 => break,
+            5 => {
+                tx.send(DevThreadMessage::Close).unwrap();
+                break;
+            }
             6 => force = true,
             _ => unreachable!(),
         };
-        if config.hot_reload.0 || force {
-            println!("Updateing");
-            tx.send(config.clone()).unwrap();
+
+        tx.send(DevThreadMessage::Config(config.clone())).unwrap();
+
+        if force {
+            tx.send(DevThreadMessage::Update).unwrap();
         }
     }
     Ok(())
+}
+
+enum DevThreadMessage {
+    Config(DevConfig),
+    Update,
+    Close,
+}
+
+#[derive(PartialEq, Eq, Hash, Clone)]
+enum FileUpdateMessage {
+    ParseDDS(PathBuf),
+    Rebuild,
+}
+
+struct FileWatcher {
+    events: Arc<Mutex<HashSet<FileUpdateMessage>>>,
+    inner: ReadDirectoryChangesWatcher,
+    old: Option<PathBuf>,
+}
+
+impl FileWatcher {
+    fn new() -> FileWatcher {
+        let events = Arc::new(Mutex::new(HashSet::new()));
+        let events_copied = events.clone();
+        let watcher =
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(e) = res {
+                    let root_path = PathBuf::from(e.source().unwrap());
+                    let mut events = events_copied.lock().unwrap();
+                    for path in e.paths {
+                        let rebuild = path.starts_with(root_path.join("assets"))
+                            || path.starts_with(root_path.join("temp"));
+                        let update_texture = path.starts_with(root_path.join("textures"));
+                        if rebuild {
+                            events.insert(FileUpdateMessage::Rebuild);
+                        } else if update_texture {
+                            events.insert(FileUpdateMessage::ParseDDS(path));
+                        };
+                    }
+                }
+            })
+            .unwrap();
+        Self {
+            inner: watcher,
+            old: None,
+            events,
+        }
+    }
+    fn watch(&mut self, path: PathBuf) {
+        if Some(path.clone()) == self.old {
+            return; //skip
+        }
+        self.close();
+        self.inner
+            .watch(path.as_path(), notify::RecursiveMode::Recursive)
+            .unwrap();
+    }
+    fn close(&mut self) {
+        if let Some(path) = &self.old {
+            self.inner.unwatch(path.as_path()).unwrap();
+        }
+        self.get();
+    }
+    fn get(&self) -> HashSet<FileUpdateMessage> {
+        let mut events = self.events.lock().unwrap();
+        mem::replace(events.borrow_mut(), HashSet::new())
+    }
+}
+
+struct DDSParser {
+    path: PathBuf,
+    running: Arc<Mutex<HashSet<PathBuf>>>,
+}
+
+impl DDSParser {
+    fn new(path: PathBuf) -> DDSParser {
+        let running = Arc::new(Mutex::new(HashSet::new()));
+        DDSParser { running, path }
+    }
+    fn parse(&mut self, path: PathBuf) {
+        if !path.is_file() {
+            return;
+        }
+
+        let in_queue = self.running.lock().unwrap().insert(path.clone());
+        if !in_queue {
+            return;
+        }
+
+        let running = self.running.clone();
+        let output_path = self.path.clone();
+        thread::spawn(move || {
+            if let Ok(image) = image::open(path.clone()) {
+                println!("Parse dds file ({})", path.display());
+                let image = image.to_rgba8();
+                let dds = image_dds::dds_from_image(
+                    &image,
+                    image_dds::ImageFormat::BC7Srgb,
+                    image_dds::Quality::Slow,
+                    image_dds::Mipmaps::Disabled,
+                )
+                .unwrap();
+                let dds_path = path.file_stem().unwrap().to_string_lossy().to_string() + ".dds";
+                let mut writer = std::io::BufWriter::new(
+                    std::fs::File::create(&output_path.join("assets").join(dds_path)).unwrap(),
+                );
+                dds.write(&mut writer).unwrap();
+            }
+            running.lock().unwrap().remove(&path);
+        });
+    }
+    /// block util finished
+    fn finished(&self) -> bool {
+        while self.running.lock().unwrap().len() != 0 {
+            thread::sleep(Duration::from_secs(1));
+        }
+        true
+    }
+    fn reload(&mut self, path: PathBuf) {
+        if path != self.path {
+            self.path = path;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -189,8 +306,8 @@ impl FolderOption {
         FolderOption(path)
     }
 }
-impl Option for FolderOption {
-    fn set_value(&mut self) {
+impl InputOption<PathBuf> for FolderOption {
+    fn set(&mut self) {
         let folder = FileDialog::new().pick_folder();
         match folder {
             Some(folder) => self.0 = folder,
@@ -198,8 +315,12 @@ impl Option for FolderOption {
         }
     }
 
+    fn get(&self) -> PathBuf {
+        self.0.clone()
+    }
+
     fn display(&self) -> String {
-        self.0.to_string_lossy().to_string()
+        self.get().to_string_lossy().to_string()
     }
 }
 
@@ -210,17 +331,20 @@ impl StringOption {
         StringOption(string)
     }
 }
-impl Option for StringOption {
-    fn set_value(&mut self) {
+impl InputOption<String> for StringOption {
+    fn set(&mut self) {
         println!("waiting input");
         self.0 = read_input()
+    }
+    fn get(&self) -> String {
+        self.0.clone()
     }
 
     fn display(&self) -> String {
         if self.0.is_empty() {
             "<NONE>".to_string()
         } else {
-            self.0.clone()
+            self.get()
         }
     }
 }
@@ -232,9 +356,12 @@ impl BoolOption {
         BoolOption(bool)
     }
 }
-impl Option for BoolOption {
-    fn set_value(&mut self) {
+impl InputOption<bool> for BoolOption {
+    fn set(&mut self) {
         self.0 = !self.0
+    }
+    fn get(&self) -> bool {
+        self.0
     }
 
     fn display(&self) -> String {
@@ -242,8 +369,9 @@ impl Option for BoolOption {
     }
 }
 
-trait Option {
-    fn set_value(&mut self);
+trait InputOption<T> {
+    fn get(&self) -> T;
+    fn set(&mut self);
     fn display(&self) -> String;
     fn format(&self, name: &str) -> String {
         format!("{}: {}", name, self.display())

@@ -128,8 +128,11 @@ pub fn build_genshin_mod(
     let assets_folder = path.join("assets");
     println!("Assets Folder: {}", assets_folder.as_path().display());
 
-    let vertex_folder = path.join("temp");
-    println!("Vertex Folder: {}", vertex_folder.as_path().display());
+    let temp_vertex_folder = path.join("temp");
+    println!(
+        "Temp Vertex Folder: {}",
+        temp_vertex_folder.as_path().display()
+    );
 
     let output_folder = if dev_mode {
         path.join("output")
@@ -138,6 +141,9 @@ pub fn build_genshin_mod(
     };
     println!("Output Folder: {}", output_folder.as_path().display());
     create_output_folder(output_folder.as_path());
+
+    let vertex_folder = output_folder.join("vertex");
+    println!("Vertex Folder: {}", vertex_folder.as_path().display());
 
     println!("{}", BREAK_LINE);
     println!("Reading hash.json in assets folder");
@@ -154,11 +160,12 @@ pub fn build_genshin_mod(
         let current_name = name.to_string() + &component_name;
         let has_blend_vb = !component.blend_vb.is_empty();
 
-        println!("|===[{}]{}", current_name, BREAK_LINE);
+        println!("====[{}]{}", current_name, BREAK_LINE);
         if !component.draw_vb.is_empty() {
+            println!("Get stride");
             let stride = {
                 let first_fmt =
-                    vertex_folder.join(format!("{}{}.fmt", current_name, classifications[0]));
+                    temp_vertex_folder.join(format!("{}{}.fmt", current_name, classifications[0]));
                 let file = File::open(first_fmt).unwrap();
                 let reader = BufReader::new(file);
 
@@ -198,29 +205,30 @@ pub fn build_genshin_mod(
                     i + 2 - classifications_len
                 ));
 
-                println!("|[{}]{}", current_object, BREAK_LINE);
-                println!("\nCollecting");
+                println!("Load [{}]", current_object);
+                println!("Collecting VB");
 
                 let filename = &(current_name.clone() + &current_object);
                 let position_stride = if has_blend_vb {
                     println!("Splitting VB by buffer type, merging body parts");
                     collect_vb(
-                        &vertex_folder,
+                        &temp_vertex_folder,
                         filename,
                         (&mut position, &mut blend, &mut texcoord),
                         stride,
                     )?;
                     40
                 } else {
-                    collect_vb_single(&vertex_folder, filename, &mut position, stride)?;
+                    collect_vb_single(&temp_vertex_folder, filename, &mut position, stride)?;
                     stride
                 };
 
                 println!("Collecting IB");
-                let ib = collect_ib(&vertex_folder, filename, offset)?;
+                let ib = collect_ib(&temp_vertex_folder, filename, offset)?;
 
+                println!("Write IB file");
                 let mut file =
-                    File::create(output_folder.join(format!("{}.ib", filename))).unwrap();
+                    File::create(vertex_folder.join(format!("{}.ib", filename))).unwrap();
                 file.write_all(&ib).unwrap();
 
                 let mut ib_override = IniChunk::new(&format!("TextureOverride{}", filename))
@@ -243,7 +251,7 @@ pub fn build_genshin_mod(
                     IniChunk::new(&format!("Resource{}IB", filename))
                         .attr("type", "Buffer")
                         .attr("format", "DXGI_FORMAT_R32_UINT")
-                        .attr("filename", &format!("{}.ib", filename)),
+                        .attr("filename", &format!("./vertex/{}.ib", filename)),
                 );
 
                 if position.len() % position_stride != 0 {
@@ -292,27 +300,29 @@ pub fn build_genshin_mod(
                     ini_config.insert(
                         "tex_res",
                         IniChunk::new(&format!("Resource{}{}", filename, layout_name))
-                            .attr("filename", &full_filename),
+                            .attr("filename", &format!("./assets/{}", full_filename)),
                     );
-                    fs::copy(
-                        assets_folder.join(&full_filename),
-                        output_folder.join(&full_filename),
-                    )
-                    .unwrap();
+                    if dev_mode {
+                        fs::copy(
+                            assets_folder.join(&full_filename),
+                            output_folder.join("assets").join(&full_filename),
+                        )
+                        .unwrap();
+                    }
                 }
                 ini_config.insert("ib_override", ib_override)
             }
             if !component.blend_vb.is_empty() {
                 println!("Writing merged buffer files");
                 let mut file =
-                    File::create(output_folder.join(format!("{}Position.buf", current_name)))
+                    File::create(vertex_folder.join(format!("{}Position.buf", current_name)))
                         .unwrap();
                 file.write_all(&position).unwrap();
                 let mut file =
-                    File::create(output_folder.join(format!("{}Blend.buf", current_name))).unwrap();
+                    File::create(vertex_folder.join(format!("{}Blend.buf", current_name))).unwrap();
                 file.write_all(&blend).unwrap();
                 let mut file =
-                    File::create(output_folder.join(format!("{}Texcoord.buf", current_name)))
+                    File::create(vertex_folder.join(format!("{}Texcoord.buf", current_name)))
                         .unwrap();
                 file.write_all(&texcoord).unwrap();
 
@@ -356,7 +366,10 @@ pub fn build_genshin_mod(
                     IniChunk::new(&format!("Resource{}Position", current_name))
                         .attr("type", "Buffer")
                         .attr("stride", "40")
-                        .attr("filename", &format!("{}Position.buf", current_name)),
+                        .attr(
+                            "filename",
+                            &format!("./vertex/{}Position.buf", current_name),
+                        ),
                 );
 
                 ini_config.insert(
@@ -364,7 +377,7 @@ pub fn build_genshin_mod(
                     IniChunk::new(&format!("Resource{}Blend", current_name))
                         .attr("type", "Buffer")
                         .attr("stride", "32")
-                        .attr("filename", &format!("{}Blend.buf", current_name)),
+                        .attr("filename", &format!("./vertex/{}Blend.buf", current_name)),
                 );
 
                 ini_config.insert(
@@ -372,12 +385,17 @@ pub fn build_genshin_mod(
                     IniChunk::new(&format!("Resource{}Texcoord", current_name))
                         .attr("type", "Buffer")
                         .attr("stride", &(stride - 72).to_string())
-                        .attr("filename", &format!("{}Texcoord.buf", current_name)),
+                        .attr(
+                            "filename",
+                            &format!("./vertex/{}Texcoord.buf", current_name),
+                        ),
                 );
             } else {
                 let mut file =
-                    File::create(output_folder.join(format!("{}.buf", current_name))).unwrap();
+                    File::create(output_folder.join(format!("./vertex/{}.buf", current_name)))
+                        .unwrap();
                 file.write_all(&position).unwrap();
+
                 let mut chunk = IniChunk::new(&format!("TextureOverride{}", current_name))
                     .attr("hash", &component.draw_vb)
                     .attr("vb0", &format!("Resource{}", current_name));
@@ -391,7 +409,7 @@ pub fn build_genshin_mod(
                     IniChunk::new(&format!("Resource{}", current_name))
                         .attr("type", "Buffer")
                         .attr("stride", &stride.to_string())
-                        .attr("filename", &format!("{}.buf", current_name)),
+                        .attr("filename", &format!("./vertex/{}.buf", current_name)),
                 );
             }
         } else {
@@ -421,6 +439,7 @@ pub fn build_genshin_mod(
                 } else {
                     textures
                 };
+
                 for (j, texture) in textures.iter().enumerate() {
                     let layout_name = texture[0].clone();
                     if no_ramps
@@ -443,17 +462,19 @@ pub fn build_genshin_mod(
                     ini_config.insert(
                         "tex_res",
                         IniChunk::new(&format!("Resource{}{}", filename, layout_name))
-                            .attr("filename", &full_filename),
+                            .attr("filename", &format!("./assets/{}", &full_filename)),
                     );
                     fs::copy(
                         assets_folder.join(&full_filename),
-                        output_folder.join(&full_filename),
+                        output_folder.join("assets").join(&full_filename),
                     )
                     .unwrap();
                 }
             }
         }
     }
+
+    println!("collect finished");
 
     if !variants.is_empty() {
         ini_config.insert(
@@ -487,10 +508,11 @@ pub fn build_genshin_mod(
                 variants
             )),
         );
+    }
 
-        println!("Generating .ini file");
-        let ini_text = ini_config.format(
-            ";Constants -------------------------
+    println!("Generating .ini file");
+    let ini_text = ini_config.format(
+        ";Constants -------------------------
 <constant>
 ;Overrides -----------------------
 <vb_override>
@@ -504,10 +526,9 @@ pub fn build_genshin_mod(
 <other>
 ;.ini generated by HornyLoader (Discord `xiaoeyun`)
 ; based GIMI (Genshin-Impact-Model-Importer)",
-        );
+    );
 
-        fs::write(output_folder.join(format!("{}.ini", name)), ini_text).unwrap();
-    }
+    fs::write(output_folder.join(format!("{}.ini", name)), ini_text).unwrap();
 
     Ok(())
 }
@@ -533,7 +554,6 @@ fn collect_vb(
 }
 
 fn collect_ib(vertex_path: &Path, name: &str, offset: usize) -> Result<Vec<u8>, String> {
-    println!("{}", vertex_path.join(name.to_string() + ".vb").display());
     let mut file = File::open(vertex_path.join(name.to_string() + ".ib")).unwrap();
     let mut buff = vec![];
     file.read_to_end(&mut buff).unwrap();
@@ -596,9 +616,21 @@ fn load_hashes(assets_path: &Path, name: &str) -> Result<Vec<Component>, String>
     }
 }
 
-fn create_output_folder(path: &Path) {
-    if !path.exists() {
+fn create_output_folder(output: &Path) {
+    if !output.exists() {
         println!("Generate mod folder");
+        fs::create_dir(output).unwrap();
+    }
+
+    let path = output.join("vertex");
+    if !path.exists() {
+        println!("Generate mod/vertex folder");
+        fs::create_dir(path).unwrap();
+    }
+
+    let path = output.join("assets");
+    if !path.exists() {
+        println!("Generate mod/assets folder");
         fs::create_dir(path).unwrap();
     }
 }
