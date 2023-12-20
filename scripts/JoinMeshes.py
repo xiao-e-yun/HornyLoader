@@ -15,7 +15,6 @@ import subprocess
 #
 #
 YOUR_7Z_PATH = "C:/Program Files/7-Zip/7z"
-YOUR_MOD_INSTALL_PATH = "C:/Program Files/7-Zip/7z"
 #
 #
 #
@@ -528,9 +527,11 @@ class ExportAnimationOperator(ExecuteAuxClassOperator):
           f.write(json.dumps({"name":object_name,"options":options_json}, separators=(',', ':')))
         #
           
-
         shutil.copytree(assets_folder,os.path.join(target_folder,"assets"))
-
+        
+        installer = bpy.path.abspath("//horny_loader.exe")
+        if os.path.isfile(installer): shutil.copy(installer,target_folder)
+        else: print("no installer")
   
 
 
