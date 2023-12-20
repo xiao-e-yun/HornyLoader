@@ -4,7 +4,7 @@ A Genshin Mod Tools for build & load
 ## Build
 `cargo build`
 
-## Dev Mode
+## Dev Mode (Blender 4.0 only)
 install scripts on blender before used.
 
 blender workspace
