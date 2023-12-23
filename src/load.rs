@@ -140,10 +140,11 @@ pub fn build_genshin_mod(
         path.to_path_buf()
     };
     println!("Output Folder: {}", output_folder.as_path().display());
-    create_output_folder(output_folder.as_path());
 
     let vertex_folder = output_folder.join("vertex");
     println!("Vertex Folder: {}", vertex_folder.as_path().display());
+
+    create_output_folder(output_folder.as_path());
 
     println!("{}", BREAK_LINE);
     println!("Reading hash.json in assets folder");
@@ -464,11 +465,13 @@ pub fn build_genshin_mod(
                         IniChunk::new(&format!("Resource{}{}", filename, layout_name))
                             .attr("filename", &format!("./assets/{}", &full_filename)),
                     );
-                    fs::copy(
-                        assets_folder.join(&full_filename),
-                        output_folder.join("assets").join(&full_filename),
-                    )
-                    .unwrap();
+                    if dev_mode {
+                      fs::copy(
+                          assets_folder.join(&full_filename),
+                          output_folder.join("assets").join(&full_filename),
+                      )
+                      .unwrap();
+                    }
                 }
             }
         }

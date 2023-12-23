@@ -21,7 +21,7 @@ pub fn main() -> Result<(), String> {
     thread::spawn(move || {
         let mut config = DevConfig::new();
         let mut file_watcher = FileWatcher::new();
-        let mut dds_parser = DDSParser::new(config.to_path.get());
+        let mut dds_parser = DDSParser::new(config.from_path.get());
 
         loop {
             let mut build = false;
@@ -31,7 +31,7 @@ pub fn main() -> Result<(), String> {
             if let Some(event) = rx.try_recv().ok() {
                 match event {
                     DevThreadMessage::Config(new_config) => {
-                        dds_parser.reload(new_config.to_path.get());
+                        dds_parser.reload(new_config.from_path.get());
 
                         if new_config.hot_reload.get() {
                             file_watcher.watch(new_config.from_path.get());
