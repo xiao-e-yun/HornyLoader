@@ -3,9 +3,7 @@ use rfd::FileDialog;
 use std::{
     borrow::BorrowMut,
     collections::HashSet,
-    env,
-    fs::rename,
-    mem,
+    env, fs, mem,
     path::PathBuf,
     sync::{mpsc, Arc, Mutex},
     thread,
@@ -23,8 +21,9 @@ pub fn main() -> Result<(), String> {
         let mut file_watcher = FileWatcher::new();
         let mut dds_parser = DDSParser::new(config.from_path.get());
 
+        let mut need_build = 0_usize;
         loop {
-            let mut build = false;
+            let mut force_build = false;
             let mut parse_list = HashSet::new();
 
             //if config updated
@@ -50,7 +49,7 @@ pub fn main() -> Result<(), String> {
                                 .filter_map(|e| e.ok().and_then(|e| Some(e.path())));
                             parse_list.extend(textures);
                         };
-                        build = true
+                        force_build = true
                     }
                     DevThreadMessage::Close => {
                         file_watcher.close();
@@ -64,7 +63,7 @@ pub fn main() -> Result<(), String> {
                         FileUpdateMessage::ParseDDS(path) => {
                             parse_list.insert(path);
                         }
-                        FileUpdateMessage::Rebuild => build = true,
+                        FileUpdateMessage::Rebuild => need_build += 2,
                     };
                 }
             }
@@ -75,7 +74,24 @@ pub fn main() -> Result<(), String> {
             }
 
             //
-            if build && dds_parser.finished() {
+            let hot_rebuild = {
+              match need_build {
+                0 => false,
+                1 => {
+                  need_build -= 1; 
+                  println!("waiting... (waiting 3s)");
+                  thread::sleep(Duration::from_secs(3));
+                  true
+                },
+                _ => {
+                  need_build -= 1;
+                  println!("waiting... (waiting {}s)",3+need_build);
+                  thread::sleep(Duration::from_millis(500));
+                  false
+                }
+              }
+            };
+            if dds_parser.finished() && (force_build || hot_rebuild) {
                 let path = config.from_path.get().clone();
                 if config.name.get().is_empty() {
                     eprintln!("Miss Char name");
@@ -95,11 +111,36 @@ pub fn main() -> Result<(), String> {
 
                 //if input != output
                 if path != to_path {
-                    println!("{} -> {}", from_path.display(), to_path.display());
-                    for file in from_path.read_dir().unwrap() {
-                        let path = file.unwrap().path();
-                        rename(path.clone(), to_path.join(path.file_name().unwrap()))
-                            .unwrap_or_else(|e| eprintln!("{}", e))
+                    move_files(from_path, to_path, 0);
+                    fn move_files(from: PathBuf, to: PathBuf, depth: usize) {
+                        for file in from.read_dir().unwrap() {
+                            if let Ok(file) = file {
+                                let filename = file.file_name().to_string_lossy().to_string();
+                                let filepath = file.path();
+                                if filepath.is_dir() {
+                                    let output_folder = to.join(filename);
+                                    println!(
+                                        "* {} -> {}",
+                                        filepath.display(),
+                                        output_folder.display()
+                                    );
+                                    if !output_folder.exists() {
+                                        fs::create_dir(&output_folder).unwrap();
+                                    }
+                                    move_files(filepath, output_folder, depth + 1);
+                                } else {
+                                    let to = to.join(filename);
+                                    println!(
+                                        "{}* {} -> {}",
+                                        "|".repeat(depth),
+                                        filepath.display(),
+                                        to.display()
+                                    );
+                                    fs::rename(&filepath, &to)
+                                        .unwrap_or_else(|e| eprintln!("{}", e))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -165,17 +206,22 @@ enum FileUpdateMessage {
 struct FileWatcher {
     events: Arc<Mutex<HashSet<FileUpdateMessage>>>,
     inner: ReadDirectoryChangesWatcher,
-    old: Option<PathBuf>,
+    curr_ref: Arc<Mutex<PathBuf>>,
+    current: Option<PathBuf>,
 }
 
 impl FileWatcher {
     fn new() -> FileWatcher {
         let events = Arc::new(Mutex::new(HashSet::new()));
         let events_copied = events.clone();
+        let curr_ref = Arc::new(Mutex::new(PathBuf::new()));
+        let source = curr_ref.clone();
         let watcher =
             notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(e) = res {
-                    let root_path = PathBuf::from(e.source().unwrap());
+                    let source = source.lock().unwrap().clone();
+                    let root_path = PathBuf::from(source);
+
                     let mut events = events_copied.lock().unwrap();
                     for path in e.paths {
                         let rebuild = path.starts_with(root_path.join("assets"))
@@ -192,23 +238,27 @@ impl FileWatcher {
             .unwrap();
         Self {
             inner: watcher,
-            old: None,
+            current: None,
+            curr_ref,
             events,
         }
     }
     fn watch(&mut self, path: PathBuf) {
-        if Some(path.clone()) == self.old {
+        if Some(path.clone()) == self.current {
             return; //skip
         }
         self.close();
         self.inner
             .watch(path.as_path(), notify::RecursiveMode::Recursive)
             .unwrap();
+        self.current = Some(path.clone());
+        *self.curr_ref.lock().unwrap() = path;
     }
     fn close(&mut self) {
-        if let Some(path) = &self.old {
+        if let Some(path) = &self.current {
             self.inner.unwatch(path.as_path()).unwrap();
         }
+        self.current = None;
         self.get();
     }
     fn get(&self) -> HashSet<FileUpdateMessage> {
@@ -261,10 +311,11 @@ impl DDSParser {
     }
     /// block util finished
     fn finished(&self) -> bool {
+        if self.running.lock().unwrap().len() == 0 {return true;}
         while self.running.lock().unwrap().len() != 0 {
             thread::sleep(Duration::from_secs(1));
         }
-        true
+        false
     }
     fn reload(&mut self, path: PathBuf) {
         if path != self.path {
