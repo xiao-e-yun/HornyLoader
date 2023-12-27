@@ -321,7 +321,7 @@ class ExecuteAuxClassOperator(bpy.types.Operator):
         scene = context.scene
         my_tool = scene.my_tool
         dirPath = my_tool.ExportFile
-        object_name = os.path.basename(dirPath)
+        object_name = scene.world.name
         try:
             mainobjects = [obj for obj in scene.objects if obj.name.lower().startswith(object_name.lower()) and obj.visible_get() and obj.type == "MESH"]
             collectionstojoin = []
@@ -451,7 +451,7 @@ class ExportAnimationOperator(ExecuteAuxClassOperator):
         my_tool = scene.my_tool        
         dirPath = my_tool.ExportFile
 
-        object_name = os.path.basename(dirPath)
+        object_name = scene.world.name
         filepath = dirPath+"/"+object_name+".vb"
         output_folder = os.path.join(os.path.dirname(filepath),"output")
         assets_folder = os.path.join(os.path.dirname(filepath),"assets")
@@ -474,13 +474,23 @@ class ExportAnimationOperator(ExecuteAuxClassOperator):
         #
         print("index options")
         collections = bpy.data.collections
-        options = []
+        options: list[list[tuple[bool,str]]] = []
         options_json = []
         pattern = r'\.\d+'
         for c in [c for c in collections if c.name.lower().find("[options]")>=0]:
-            values = c.all_objects.keys()
-            options.append(values)
-            options_json.append([c.name.replace("[options]",""), list(map(lambda x: re.sub(pattern,"",x), values))])
+            options_json_list = []
+            options_list = []
+
+            values = c.objects.keys()
+            options_json_list.extend(values)
+            options_list.extend(list(map(lambda x: (False,x), values)))
+
+            values = c.children.keys()
+            options_json_list.extend(values)
+            options_list.extend(list(map(lambda x: (True,x), values)))
+
+            options.append(options_list)
+            options_json.append([c.name.replace("[options]",""), list(map(lambda x: re.sub(pattern,"",x), options_json_list))])
           
         #
         #
@@ -498,26 +508,38 @@ class ExportAnimationOperator(ExecuteAuxClassOperator):
         #
         #
         #
-        show_list = {}
-        def optionBuild(options,text):
+        show_list: dict[str,tuple[bool,bool]] = {}
+        def optionBuild(options:  list[list[tuple[bool,str]]],text: str):
           options = options.copy()
           option = options.pop(0)
           last = len(options) == 0
           i = 0
-          for current in option:
-            for mesh in option: show_list[mesh] = current == mesh
+
+          for isCollection, name in option:
+            for isCollection, option_name in option: show_list[option_name] = (isCollection,name == option_name)
             output = text+str(i)
+
             if not last:
-                optionBuild(options,output)
+              optionBuild(options,output)
             else:
-                for name in show_list: bpy.data.objects[name].hide_render = not show_list[name]
+              for name in show_list:
+                  isCollection = show_list[name][0]
+                  show = show_list[name][1]
+                  if isCollection:
+                      objects = bpy.data.collections[name].all_objects
+                      for obj in objects: obj.hide_render = not show
+                  else:
+                      bpy.data.objects[name].hide_render = not show
+
+                  
+
+              self.exportframe(bpy.context, output+".vb")
+              new = target_folder + "/" +str(output)
+              os.rename(temp_folder, new)
+              print("exported:" + str(output))
                 
-                filename = output + ".vb"
-                self.exportframe(bpy.context, filename)
-                new = target_folder + "/" +str(output)
-                os.rename(temp_folder, new)
-                print("exported:" + str(output))
             i +=1
+  
 
         optionBuild(options,"")
 
